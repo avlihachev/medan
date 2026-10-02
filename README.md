@@ -4,13 +4,9 @@ A Claude Code mod that shows a due Anki card above the prompt while Claude works
 
 *Medan* is Swedish for "while".
 
-```
-╭──────────────────────────────────────────────╮
-│ svensk                     3 today · 1367 due │
-│ en gräns                                     │
-│ → ···   1: show                              │
-╰──────────────────────────────────────────────╯
-```
+![A due card above the prompt](docs/question.png)
+
+![The same card with its answer and grades](docs/answer.png)
 
 Press `1` to show the answer, then `1` again, `2` good or `3` easy. The grade goes to Anki through
 [AnkiConnect](https://ankiweb.net/shared/info/2055492159), so it counts as a normal review and
