@@ -114,6 +114,7 @@ describe('register', () => {
   })
 
   test('a card left unopened for a whole turn goes to the back of the queue', SVENSK, async ($, on) => {
+    mock.clock(on, { now: 1000 })
     on('turn.start', (_$, e) => ({ turnId: e.turnId }))
     on('http.fetch', fakeAnki([]))
     await $.turn.start({ text: 'hej', turnId: 't1' })
