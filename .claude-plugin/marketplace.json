@@ -1,0 +1,15 @@
+{
+  "name": "medan",
+  "description": "medan - Anki reviews above the Claude Code prompt while Claude works.",
+  "owner": {
+    "name": "Aleksandr Likhachev",
+    "url": "https://github.com/avlihachev"
+  },
+  "plugins": [
+    {
+      "name": "medan",
+      "source": "./",
+      "description": "Review due Anki cards above the Claude Code prompt while Claude works."
+    }
+  ]
+}

@@ -1,0 +1,172 @@
+import { describe, expect, mock, test } from 'claude-code/testing'
+
+import { answerSide, deckQuery, plain } from '../hooks/register'
+
+type Call = { action: string; params: Record<string, unknown> }
+
+const PROPS = {
+  hasSurvey: false,
+  isWorking: true,
+  maxRows: 12,
+  bodyColumns: 80,
+  scroll: { offset: 0, bodyRows: 11 },
+  view: {},
+}
+
+const CARDS: Record<number, { question: string; answer: string }> = {
+  11: {
+    question: '<style>.card{}</style>att förhandla',
+    answer: '<style>.card{}</style>att förhandla\n\n<hr id=answer>\n\nвести&nbsp;переговоры',
+  },
+  12: {
+    question: '<div>понятие</div>',
+    answer: '<div>понятие</div>\n\n<hr id="answer">\n\nett begrepp<br>[sound:begrepp.mp3]',
+  },
+}
+
+type Anki = { isOnline?: boolean; notDue?: number[]; ids?: number[] }
+
+function fakeAnki(calls: Call[], anki: Anki = {}) {
+  const { isOnline = true, notDue = [], ids = [11, 12] } = anki
+  return async (_$: unknown, e: { url: string; init?: { body?: string } }) => {
+    if (!isOnline) return { deny: 'ECONNREFUSED' }
+    const call = JSON.parse(e.init?.body ?? '{}') as Call
+    calls.push(call)
+    const cards = (call.params.cards ?? []) as number[]
+    const result =
+      call.action === 'findCards' ? ids
+      : call.action === 'areDue' ? cards.map(id => !notDue.includes(id))
+      : call.action === 'cardsInfo' ? cards.map(id => ({ cardId: id, ...(CARDS[id] ?? { question: `q${id}`, answer: `q${id}<hr id=answer>a${id}` }) }))
+      : call.action === 'answerCards' ? [true]
+      : null
+    return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ result, error: null }) } }
+  }
+}
+
+const SVENSK = { options: { deck: 'Svensk' } }
+
+function answers(calls: Call[]) {
+  return calls.filter(c => c.action === 'answerCards').map(c => c.params)
+}
+
+describe('register', () => {
+  for (const surface of ['terminal', 'desktop'] as const) {
+    test(`reveals and answers a due card on ${surface}`, SVENSK, async ($, on) => {
+      const calls: Call[] = []
+      const clock = mock.clock(on, { now: 1000 })
+      on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+      on('http.fetch', fakeAnki(calls))
+      await $.turn.start({ text: 'hej', turnId: 't1' })
+
+      expect(calls[0]?.params).toEqual({ query: '"deck:Svensk" is:due' })
+      const ui = await $.ui.mount({ plugin: 'medan', surface, component: 'AbovePrompt', props: PROPS })
+      expect(await ui.find({ type: 'Text', text: 'svensk' })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: 'att förhandla' })).toBeDefined()
+      expect(await ui.find({ text: /вести переговоры/ })).toBeUndefined()
+
+      await ui.press({ key: 'show' })
+      expect(await ui.find({ type: 'Text', text: '→ вести переговоры' })).toBeDefined()
+
+      await clock.advance(500)
+      await ui.press({ key: 'good' })
+      expect(answers(calls)).toEqual([{ answers: [{ cardId: 11, ease: 3 }] }])
+      expect(await ui.find({ type: 'Text', text: 'понятие' })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: /1 today · 1 due/ })).toBeDefined()
+
+      await ui.press({ key: 'show' })
+      expect(await ui.find({ type: 'Text', text: '→ ett begrepp' })).toBeDefined()
+      await ui.unmount()
+    })
+  }
+
+  test('a grade pressed right after show is ignored, so a double tap does not answer "again"', SVENSK, async ($, on) => {
+    const calls: Call[] = []
+    const clock = mock.clock(on, { now: 1000 })
+    on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+    on('http.fetch', fakeAnki(calls))
+    await $.turn.start({ text: 'hej', turnId: 't1' })
+
+    const ui = await $.ui.mount({ plugin: 'medan', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
+    await ui.press({ key: 'show' })
+    await ui.press({ key: 'again' })
+    expect(answers(calls)).toEqual([])
+
+    await clock.advance(500)
+    await Promise.all([ui.press({ key: 'good' }), ui.press({ key: 'good' })])
+    expect(answers(calls)).toHaveLength(1)
+    await ui.unmount()
+  })
+
+  test('skips cards no longer due past the first window', SVENSK, async ($, on) => {
+    const calls: Call[] = []
+    const ids = Array.from({ length: 25 }, (_, i) => 100 + i)
+    on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+    on('http.fetch', fakeAnki(calls, { ids, notDue: ids.slice(0, 22) }))
+    await $.turn.start({ text: 'hej', turnId: 't1' })
+
+    const ui = await $.ui.mount({ plugin: 'medan', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
+    expect(await ui.find({ type: 'Text', text: 'q122' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /3 due/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('says nothing is due when every card was reviewed elsewhere', SVENSK, async ($, on) => {
+    on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+    on('http.fetch', fakeAnki([], { notDue: [11, 12] }))
+    await $.turn.start({ text: 'hej', turnId: 't1' })
+    const ui = await $.ui.mount({ plugin: 'medan', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
+    expect(await ui.find({ type: 'Text', text: /svensk · nothing due/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('stays out of the way between turns', SVENSK, async ($, on) => {
+    on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+    on('http.fetch', fakeAnki([]))
+    on('ui.render', ($, e) => {
+      const { Text } = $.ui.resolve(e)
+      return <Text>engine band</Text>
+    })
+    await $.turn.start({ text: 'hej', turnId: 't1' })
+    const ui = await $.ui.mount({ plugin: 'medan', surface: 'terminal', component: 'AbovePrompt', props: { ...PROPS, isWorking: false } })
+    expect(await ui.find({ text: /att förhandla/ })).toBeUndefined()
+    expect(await ui.find({ text: 'engine band' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('says Anki is offline instead of failing', SVENSK, async ($, on) => {
+    on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+    on('http.fetch', fakeAnki([], { isOnline: false }))
+    await $.turn.start({ text: 'hej', turnId: 't1' })
+    const ui = await $.ui.mount({ plugin: 'medan', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
+    expect(await ui.find({ type: 'Text', text: /svensk · Anki offline/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('reviews the Default deck when none is configured', async ($, on) => {
+    const calls: Call[] = []
+    on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+    on('http.fetch', fakeAnki(calls))
+    await $.turn.start({ text: 'hej', turnId: 't1' })
+    expect(calls[0]?.params).toEqual({ query: '"deck:Default" is:due' })
+  })
+})
+
+describe('text', () => {
+  test('escapes Anki search syntax in deck names', async () => {
+    expect(deckQuery('Svensk::Verb')).toBe('"deck:Svensk::Verb" is:due')
+    expect(deckQuery('my_deck*')).toBe('"deck:my\\_deck\\*" is:due')
+    expect(deckQuery('a "b" \\c')).toBe('"deck:a \\"b\\" \\\\c" is:due')
+  })
+
+  test('keeps slashes and decodes entities', async () => {
+    expect(plain('see http://x.com/a/ and /etc')).toBe('see http://x.com/a/ and /etc')
+    expect(plain('it&#x27;s &mdash; &#8212; &apos;ok&apos; &amp;lt;')).toBe("it's — — 'ok' &lt;")
+    expect(plain('<ul><li>a</li><li>b</li></ul>')).toBe('a / b')
+    expect(plain('<img src="x.png">')).toBe('[image]')
+  })
+
+  test('takes the part after the answer rule, or the whole side when there is none', async () => {
+    expect(answerSide('q<hr id=answer>a')).toBe('a')
+    expect(answerSide('{{c1::a}} is <span class=cloze>a</span>')).toBe('{{c1::a}} is a')
+  })
+})
