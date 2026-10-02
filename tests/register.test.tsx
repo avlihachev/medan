@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { answerSide, deckQuery, plain } from '../hooks/register'
+import { answerSide, deckQuery, plain, shuffled } from '../hooks/register'
 
 type Call = { action: string; params: Record<string, unknown> }
 
@@ -24,17 +24,17 @@ const CARDS: Record<number, { question: string; answer: string }> = {
   },
 }
 
-type Anki = { isOnline?: boolean; notDue?: number[]; ids?: number[] }
+type Anki = { isOnline?: boolean; notDue?: number[]; learning?: number[]; reviews?: number[] }
 
 function fakeAnki(calls: Call[], anki: Anki = {}) {
-  const { isOnline = true, notDue = [], ids = [11, 12] } = anki
+  const { isOnline = true, notDue = [], learning = [11, 12], reviews = [] } = anki
   return async (_$: unknown, e: { url: string; init?: { body?: string } }) => {
     if (!isOnline) return { deny: 'ECONNREFUSED' }
     const call = JSON.parse(e.init?.body ?? '{}') as Call
     calls.push(call)
     const cards = (call.params.cards ?? []) as number[]
     const result =
-      call.action === 'findCards' ? ids
+      call.action === 'findCards' ? (String(call.params.query).endsWith(' -is:learn') ? reviews : learning)
       : call.action === 'areDue' ? cards.map(id => !notDue.includes(id))
       : call.action === 'cardsInfo' ? cards.map(id => ({ cardId: id, ...(CARDS[id] ?? { question: `q${id}`, answer: `q${id}<hr id=answer>a${id}` }) }))
       : call.action === 'answerCards' ? [true]
@@ -58,7 +58,10 @@ describe('register', () => {
       on('http.fetch', fakeAnki(calls))
       await $.turn.start({ text: 'hej', turnId: 't1' })
 
-      expect(calls[0]?.params).toEqual({ query: '"deck:Svensk" is:due' })
+      expect(calls.slice(0, 2).map(c => c.params)).toEqual([
+        { query: '"deck:Svensk" is:due is:learn' },
+        { query: '"deck:Svensk" is:due -is:learn' },
+      ])
       const ui = await $.ui.mount({ plugin: 'medan', surface, component: 'AbovePrompt', props: PROPS })
       expect(await ui.find({ type: 'Text', text: 'svensk' })).toBeDefined()
       expect(await ui.find({ type: 'Text', text: 'att förhandla' })).toBeDefined()
@@ -101,12 +104,37 @@ describe('register', () => {
     const calls: Call[] = []
     const ids = Array.from({ length: 25 }, (_, i) => 100 + i)
     on('turn.start', (_$, e) => ({ turnId: e.turnId }))
-    on('http.fetch', fakeAnki(calls, { ids, notDue: ids.slice(0, 22) }))
+    on('http.fetch', fakeAnki(calls, { learning: ids, notDue: ids.slice(0, 22) }))
     await $.turn.start({ text: 'hej', turnId: 't1' })
 
     const ui = await $.ui.mount({ plugin: 'medan', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
     expect(await ui.find({ type: 'Text', text: 'q122' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /3 due/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('a card left unopened for a whole turn goes to the back of the queue', SVENSK, async ($, on) => {
+    on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+    on('http.fetch', fakeAnki([]))
+    await $.turn.start({ text: 'hej', turnId: 't1' })
+    const ui = await $.ui.mount({ plugin: 'medan', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
+    expect(await ui.find({ type: 'Text', text: 'att förhandla' })).toBeDefined()
+
+    await $.turn.start({ text: 'again', turnId: 't2' })
+    expect(await ui.find({ type: 'Text', text: 'понятие' })).toBeDefined()
+
+    await ui.press({ key: 'show' })
+    await $.turn.start({ text: 'and again', turnId: 't3' })
+    expect(await ui.find({ type: 'Text', text: 'понятие' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('deals learning cards before the review backlog', SVENSK, async ($, on) => {
+    on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+    on('http.fetch', fakeAnki([], { learning: [12], reviews: [11] }))
+    await $.turn.start({ text: 'hej', turnId: 't1' })
+    const ui = await $.ui.mount({ plugin: 'medan', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
+    expect(await ui.find({ type: 'Text', text: 'понятие' })).toBeDefined()
     await ui.unmount()
   })
 
@@ -147,11 +175,16 @@ describe('register', () => {
     on('turn.start', (_$, e) => ({ turnId: e.turnId }))
     on('http.fetch', fakeAnki(calls))
     await $.turn.start({ text: 'hej', turnId: 't1' })
-    expect(calls[0]?.params).toEqual({ query: '"deck:Default" is:due' })
+    expect(calls[0]?.params).toEqual({ query: '"deck:Default" is:due is:learn' })
   })
 })
 
 describe('text', () => {
+  test('shuffled keeps every card exactly once', async () => {
+    const ids = Array.from({ length: 50 }, (_, i) => i)
+    expect([...shuffled(ids)].sort((a, b) => a - b)).toEqual(ids)
+  })
+
   test('escapes Anki search syntax in deck names', async () => {
     expect(deckQuery('Svensk::Verb')).toBe('"deck:Svensk::Verb" is:due')
     expect(deckQuery('my_deck*')).toBe('"deck:my\\_deck\\*" is:due')

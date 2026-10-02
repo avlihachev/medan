@@ -88,6 +88,33 @@ async function goOffline($: EngineInterface): Promise<void> {
   await update($, card, () => null)
 }
 
+export function shuffled<T>(items: readonly T[]): T[] {
+  const out = [...items]
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[out[i], out[j]] = [out[j]!, out[i]!]
+  }
+
+  return out
+}
+
+// learning steps first, as Anki does; reviews shuffled so a session doesn't always open on the oldest cards
+async function dueCards($: EngineInterface): Promise<number[] | null> {
+  const query = deckQuery(deckName())
+  const learning = await anki<number[]>($, 'findCards', { query: `${query} is:learn` })
+  const reviews = await anki<number[]>($, 'findCards', { query: `${query} -is:learn` })
+  if (learning === null || reviews === null) return null
+
+  return [...learning, ...shuffled(reviews)]
+}
+
+async function skipUnopened($: EngineInterface): Promise<void> {
+  const current = await read($, card)
+  if (current === null || (await read($, isRevealed))) return
+  await update($, card, () => null)
+  await update($, deck, d => ({ ...d, queue: [...d.queue, current.id] }))
+}
+
 async function deal($: EngineInterface): Promise<void> {
   await answering
 
@@ -99,7 +126,7 @@ async function deal($: EngineInterface): Promise<void> {
     if (queue.length === 0) {
       if (hasRefilled) break
       hasRefilled = true
-      const ids = await anki<number[]>($, 'findCards', { query: deckQuery(deckName()) })
+      const ids = await dueCards($)
       if (ids === null) return goOffline($)
       queue = ids
       continue
@@ -168,6 +195,7 @@ export const register: Register = (on, options) => {
       await update($, deck, (): Deck => ({ name: deckName(), status: 'idle', queue: [] }))
       await update($, card, () => null)
     }
+    await skipUnopened($)
     if ((await read($, card)) === null) await dealNext($)
 
     return next(e)

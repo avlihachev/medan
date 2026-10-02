@@ -1,6 +1,6 @@
 {
   "name": "medan",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Review due Anki cards in the band above the Claude Code prompt while Claude works; answers go straight to Anki through AnkiConnect.",
   "author": { "name": "Aleksandr Likhachev", "url": "https://github.com/avlihachev" },
   "homepage": "https://github.com/avlihachev/medan",
