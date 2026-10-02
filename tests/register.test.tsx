@@ -28,16 +28,22 @@ type Anki = { isOnline?: boolean; notDue?: number[]; learning?: number[]; review
 
 function fakeAnki(calls: Call[], anki: Anki = {}) {
   const { isOnline = true, notDue = [], learning = [11, 12], reviews = [] } = anki
+  const answered: number[] = []
+  const findCards = (query: string) =>
+    query.endsWith(' -is:learn') ? reviews
+    : query.endsWith(' is:learn') ? learning
+    : query.endsWith(' rated:1') ? answered
+    : [...learning, ...reviews].filter(id => !notDue.includes(id) && !answered.includes(id))
   return async (_$: unknown, e: { url: string; init?: { body?: string } }) => {
     if (!isOnline) return { deny: 'ECONNREFUSED' }
     const call = JSON.parse(e.init?.body ?? '{}') as Call
     calls.push(call)
     const cards = (call.params.cards ?? []) as number[]
     const result =
-      call.action === 'findCards' ? (String(call.params.query).endsWith(' -is:learn') ? reviews : learning)
+      call.action === 'findCards' ? findCards(String(call.params.query))
       : call.action === 'areDue' ? cards.map(id => !notDue.includes(id))
       : call.action === 'cardsInfo' ? cards.map(id => ({ cardId: id, ...(CARDS[id] ?? { question: `q${id}`, answer: `q${id}<hr id=answer>a${id}` }) }))
-      : call.action === 'answerCards' ? [true]
+      : call.action === 'answerCards' ? (answered.push(...(call.params.answers as { cardId: number }[]).map(a => a.cardId)), [true])
       : null
     return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ result, error: null }) } }
   }
@@ -136,6 +142,15 @@ describe('register', () => {
     await $.turn.start({ text: 'hej', turnId: 't1' })
     const ui = await $.ui.mount({ plugin: 'medan', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
     expect(await ui.find({ type: 'Text', text: 'понятие' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('counts come from Anki, so reviews done elsewhere show up', SVENSK, async ($, on) => {
+    on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+    on('http.fetch', fakeAnki([], { learning: [11, 12, 13], notDue: [13] }))
+    await $.turn.start({ text: 'hej', turnId: 't1' })
+    const ui = await $.ui.mount({ plugin: 'medan', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
+    expect(await ui.find({ type: 'Text', text: '0 today · 2 due' })).toBeDefined()
     await ui.unmount()
   })
 

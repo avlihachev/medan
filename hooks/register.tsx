@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Card, Deck } from '../types'
+import type { Card, Counts, Deck } from '../types'
 
 const EASE = { again: 1, good: 3, easy: 4 } as const
 const AREDUE_WINDOW = 20
@@ -11,7 +11,7 @@ const SEP = '\u0001'
 const card = atom({ plugin: 'medan', key: 'card' } as const, null)
 const isRevealed = atom({ plugin: 'medan', key: 'isRevealed' } as const, false)
 const deck = atom({ plugin: 'medan', key: 'deck' } as const, { name: '', status: 'idle', queue: [] })
-const reviewed = atom({ plugin: 'medan', key: 'reviewed' } as const, 0)
+const counts = atom({ plugin: 'medan', key: 'counts' } as const, null)
 
 type Settings = { deck: string; ankiConnectUrl: string }
 type CardInfo = { cardId: number; question: string; answer: string }
@@ -60,8 +60,12 @@ export function answerSide(html: string): string {
   return plain(parts[parts.length - 1] ?? '')
 }
 
+export function deckFilter(name: string): string {
+  return `"deck:${name.replace(/[\\"*_]/g, '\\$&')}"`
+}
+
 export function deckQuery(name: string): string {
-  return `"deck:${name.replace(/[\\"*_]/g, '\\$&')}" is:due`
+  return `${deckFilter(name)} is:due`
 }
 
 function deckName(): string {
@@ -81,6 +85,14 @@ async function anki<T>($: EngineInterface, action: string, params: object = {}):
   } catch {
     return null
   }
+}
+
+async function refreshCounts($: EngineInterface): Promise<void> {
+  const filter = deckFilter(deckName())
+  const today = await anki<number[]>($, 'findCards', { query: `${filter} rated:1` })
+  const due = await anki<number[]>($, 'findCards', { query: `${filter} is:due` })
+  if (today === null || due === null) return
+  await update($, counts, (): Counts => ({ today: today.length, due: due.length }))
 }
 
 async function goOffline($: EngineInterface): Promise<void> {
@@ -183,8 +195,8 @@ async function answer($: EngineInterface, shown: Card, ease: number): Promise<vo
   answering = request
   const ok = await request
   answering = null
-  if (ok?.[0]) await update($, reviewed, n => n + 1)
   await dealNext($)
+  if (ok?.[0]) await refreshCounts($)
 }
 
 export const register: Register = (on, options) => {
@@ -197,6 +209,7 @@ export const register: Register = (on, options) => {
     }
     await skipUnopened($)
     if ((await read($, card)) === null) await dealNext($)
+    await refreshCounts($)
 
     return next(e)
   })
@@ -206,13 +219,13 @@ export const register: Register = (on, options) => {
 
     const { Box, Button, Text } = $.ui.resolve(e)
     const current = await read($, card)
-    const { status, queue } = await read($, deck)
-    const done = await read($, reviewed)
+    const { status } = await read($, deck)
+    const tally = await read($, counts)
     const title = deckName().toLowerCase()
 
     if (current === null) {
       if (status === 'offline') return <Text dimColor>  {title} · Anki offline</Text>
-      if (status === 'empty') return <Text dimColor>  {title} · nothing due ✓ {done > 0 ? `(${done} today)` : ''}</Text>
+      if (status === 'empty') return <Text dimColor>  {title} · nothing due ✓ {tally && tally.today > 0 ? `(${tally.today} today)` : ''}</Text>
       return next(e)
     }
 
@@ -228,7 +241,7 @@ export const register: Register = (on, options) => {
       >
         <Box justifyContent="space-between">
           <Text color="cyan" bold>{title}</Text>
-          <Text dimColor>{done} today · {queue.length + 1} due</Text>
+          <Text dimColor>{tally ? `${tally.today} today · ${tally.due} due` : ''}</Text>
         </Box>
         <Text bold color="yellow">{current.prompt}</Text>
         {shown
