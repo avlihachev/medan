@@ -8,7 +8,7 @@ A Claude Code mod that shows a due Anki card above the prompt while Claude works
 
 ![The same card with its answer and grades](docs/answer.png)
 
-Press `1` to show the answer, then `1` again, `2` good or `3` easy. The grade goes to Anki through
+Press `1` to show the answer, then `2` for again or `3` for easy. The grade goes to Anki through
 [AnkiConnect](https://ankiweb.net/shared/info/2055492159), so it counts as a normal review and
 Anki schedules the card as usual. The band only appears while a turn is running. When Claude
 finishes, it hides and leaves the prompt alone.
@@ -49,15 +49,23 @@ Change them in `/config`, or in `~/.claude/settings.json`:
 | --- | --- | --- |
 | `deck` | `Default` | Deck to review, subdecks included |
 | `ankiConnectUrl` | `http://localhost:8765` | Where AnkiConnect listens |
+| `showKey` | `1` | Shows the answer |
+| `againKey` | `2` | Grades Again |
+| `hardKey` | *(empty)* | Grades Hard |
+| `goodKey` | *(empty)* | Grades Good |
+| `easyKey` | `3` | Grades Easy |
+
+A key is one digit or one lowercase letter. An empty key hides that button. For Anki's own layout,
+set `againKey` `1`, `hardKey` `2`, `goodKey` `3` and `easyKey` `4`.
 
 Any note type works. Cards are shown the way Anki renders them, as text: question on top,
 the part after `<hr id=answer>` as the answer.
 
 ## Keys
 
-The band takes digit hotkeys when the composer is empty. If a digit doesn't reach it, click the
-band or press `ctrl+x tab` to focus it first. A grade pressed within 0.4 s of `show` is ignored, so
-a double tap on `1` doesn't grade the card "again" before you've read it.
+Digits work straight from an empty composer. Letters only reach the band once it has focus: click
+it or press `ctrl+x tab`. If `showKey` is also a grade's key, a grade pressed within 0.4 s of
+`show` is ignored, so a double tap doesn't grade a card you haven't read.
 
 ## Development
 

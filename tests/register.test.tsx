@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { answerSide, deckQuery, plain, shuffled } from '../hooks/register'
+import { answerSide, deckQuery, gradeButtons, hotkey, plain, shuffled } from '../hooks/register'
 
 type Call = { action: string; params: Record<string, unknown> }
 
@@ -59,7 +59,7 @@ describe('register', () => {
   for (const surface of ['terminal', 'desktop'] as const) {
     test(`reveals and answers a due card on ${surface}`, SVENSK, async ($, on) => {
       const calls: Call[] = []
-      const clock = mock.clock(on, { now: 1000 })
+      mock.clock(on, { now: 1000 })
       on('turn.start', (_$, e) => ({ turnId: e.turnId }))
       on('http.fetch', fakeAnki(calls))
       await $.turn.start({ text: 'hej', turnId: 't1' })
@@ -76,9 +76,9 @@ describe('register', () => {
       await ui.press({ key: 'show' })
       expect(await ui.find({ type: 'Text', text: '→ вести переговоры' })).toBeDefined()
 
-      await clock.advance(500)
-      await ui.press({ key: 'good' })
-      expect(answers(calls)).toEqual([{ answers: [{ cardId: 11, ease: 3 }] }])
+      expect(await ui.find({ key: 'good' })).toBeUndefined()
+      await ui.press({ key: 'easy' })
+      expect(answers(calls)).toEqual([{ answers: [{ cardId: 11, ease: 4 }] }])
       expect(await ui.find({ type: 'Text', text: 'понятие' })).toBeDefined()
       expect(await ui.find({ type: 'Text', text: /1 today · 1 due/ })).toBeDefined()
 
@@ -88,7 +88,7 @@ describe('register', () => {
     })
   }
 
-  test('a grade pressed right after show is ignored, so a double tap does not answer "again"', SVENSK, async ($, on) => {
+  test('with show and again on the same key, a double tap does not answer "again"', { options: { deck: 'Svensk', againKey: '1' } }, async ($, on) => {
     const calls: Call[] = []
     const clock = mock.clock(on, { now: 1000 })
     on('turn.start', (_$, e) => ({ turnId: e.turnId }))
@@ -101,7 +101,7 @@ describe('register', () => {
     expect(answers(calls)).toEqual([])
 
     await clock.advance(500)
-    await Promise.all([ui.press({ key: 'good' }), ui.press({ key: 'good' })])
+    await Promise.all([ui.press({ key: 'easy' }), ui.press({ key: 'easy' })])
     expect(answers(calls)).toHaveLength(1)
     await ui.unmount()
   })
@@ -192,6 +192,21 @@ describe('register', () => {
     on('http.fetch', fakeAnki(calls))
     await $.turn.start({ text: 'hej', turnId: 't1' })
     expect(calls[0]?.params).toEqual({ query: '"deck:Default" is:due is:learn' })
+  })
+})
+
+describe('keys', () => {
+  test('default layout is show 1, again 2, easy 3', async () => {
+    const defaults = { deck: 'Default', ankiConnectUrl: '', showKey: '1', againKey: '2', hardKey: '', goodKey: '', easyKey: '3' }
+    expect(gradeButtons(defaults).map(g => `${g.key}:${g.name}`)).toEqual(['2:again', '3:easy'])
+  })
+
+  test('rejects keys the engine would refuse and drops duplicates', async () => {
+    expect(hotkey(' ')).toBeUndefined()
+    expect(hotkey('space')).toBeUndefined()
+    expect(hotkey('E')).toBe('e')
+    const keys = { deck: '', ankiConnectUrl: '', showKey: '1', againKey: '2', hardKey: '2', goodKey: '!', easyKey: 'e' }
+    expect(gradeButtons(keys).map(g => `${g.key}:${g.name}`)).toEqual(['2:again', 'e:easy'])
   })
 })
 

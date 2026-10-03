@@ -3,7 +3,12 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { Card, Counts, Deck } from '../types'
 
-const EASE = { again: 1, good: 3, easy: 4 } as const
+const GRADES = [
+  { name: 'again', ease: 1 },
+  { name: 'hard', ease: 2 },
+  { name: 'good', ease: 3 },
+  { name: 'easy', ease: 4 },
+] as const
 const AREDUE_WINDOW = 20
 const GRADE_DELAY_MS = 400
 const SEP = '\u0001'
@@ -13,7 +18,8 @@ const isRevealed = atom({ plugin: 'medan', key: 'isRevealed' } as const, false)
 const deck = atom({ plugin: 'medan', key: 'deck' } as const, { name: '', status: 'idle', queue: [] })
 const counts = atom({ plugin: 'medan', key: 'counts' } as const, null)
 
-type Settings = { deck: string; ankiConnectUrl: string }
+type Grade = (typeof GRADES)[number]['name']
+type Settings = { deck: string; ankiConnectUrl: string; showKey: string } & Record<`${Grade}Key`, string>
 type CardInfo = { cardId: number; question: string; answer: string }
 
 const ENTITIES: Record<string, string> = {
@@ -21,7 +27,15 @@ const ENTITIES: Record<string, string> = {
   mdash: '—', ndash: '–', hellip: '…', laquo: '«', raquo: '»',
 }
 
-let settings: Settings = { deck: 'Default', ankiConnectUrl: 'http://localhost:8765' }
+let settings: Settings = {
+  deck: 'Default',
+  ankiConnectUrl: 'http://localhost:8765',
+  showKey: '1',
+  againKey: '2',
+  hardKey: '',
+  goodKey: '',
+  easyKey: '3',
+}
 let dealing: Promise<void> | null = null
 let answering: Promise<unknown> | null = null
 let revealedAt = 0
@@ -58,6 +72,23 @@ export function answerSide(html: string): string {
   const parts = html.split(/<hr[^>]*id=["']?answer["']?[^>]*>/i)
 
   return plain(parts[parts.length - 1] ?? '')
+}
+
+export function hotkey(key: string | undefined): string | undefined {
+  const value = key?.trim().toLowerCase() ?? ''
+
+  return /^[0-9a-z]$/.test(value) ? value : undefined
+}
+
+export function gradeButtons(keys: Settings): { name: Grade; ease: number; key: string }[] {
+  const taken = new Set<string>()
+
+  return GRADES.flatMap(({ name, ease }) => {
+    const key = hotkey(keys[`${name}Key`])
+    if (key === undefined || taken.has(key)) return []
+    taken.add(key)
+    return [{ name, ease, key }]
+  })
 }
 
 export function deckFilter(name: string): string {
@@ -182,7 +213,8 @@ async function reveal($: EngineInterface): Promise<void> {
 }
 
 async function answer($: EngineInterface, shown: Card, ease: number): Promise<void> {
-  if ((await $.clock.now()) - revealedAt < GRADE_DELAY_MS) return
+  const sharesShowKey = gradeButtons(settings).some(grade => grade.key === hotkey(settings.showKey))
+  if (sharesShowKey && (await $.clock.now()) - revealedAt < GRADE_DELAY_MS) return
 
   let isClaimed = false
   await update($, card, c => {
@@ -249,16 +281,16 @@ export const register: Register = (on, options) => {
             <Box flexDirection="column">
               <Text>→ {current.answer}</Text>
               <Box gap={2}>
-                <Button key="again" hotkey="1" plain label="again" onPress={() => answer($, current, EASE.again)} />
-                <Button key="good" hotkey="2" plain label="good" onPress={() => answer($, current, EASE.good)} />
-                <Button key="easy" hotkey="3" plain label="easy" onPress={() => answer($, current, EASE.easy)} />
+                {gradeButtons(settings).map(grade => (
+                  <Button key={grade.name} hotkey={grade.key} plain label={grade.name} onPress={() => answer($, current, grade.ease)} />
+                ))}
               </Box>
             </Box>
           )
           : (
             <Box gap={2}>
               <Text dimColor>→ ···</Text>
-              <Button key="show" hotkey="1" plain label="show" onPress={() => reveal($)} />
+              <Button key="show" hotkey={hotkey(settings.showKey)} plain label="show" onPress={() => reveal($)} />
             </Box>
           )}
       </Box>
